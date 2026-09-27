@@ -12,8 +12,10 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   tz.initializeTimeZones();
 
-  const android = AndroidInitializationSettings('@mipmap/ic_launcher');
-  const initSettings = InitializationSettings(android: android);
+  const androidSettings =
+      AndroidInitializationSettings('@mipmap/ic_launcher');
+  const initSettings = InitializationSettings(android: androidSettings);
+
   await notifications.initialize(initSettings);
 
   await notifications
@@ -193,7 +195,6 @@ class AppDb {
         subject: subject.trim(),
       ).toMap()
         ..remove('id');
-
       await db.insert('lessons', data);
     } else {
       await db.update(
@@ -211,24 +212,21 @@ class AppDb {
   }) async {
     final lessons = await allLessons();
 
-    final days = lessons
+    final weekdays = lessons
         .where(
-          (e) =>
-              e.subject.trim().toLowerCase() ==
+          (lesson) =>
+              lesson.subject.trim().toLowerCase() ==
               subject.trim().toLowerCase(),
         )
-        .map((e) => e.weekday)
+        .map((lesson) => lesson.weekday)
         .toSet();
 
-    if (days.isEmpty) return null;
+    if (weekdays.isEmpty) return null;
 
     for (int offset = 1; offset <= 14; offset++) {
-      final candidate =
-          DateTime(from.year, from.month, from.day).add(Duration(days: offset));
-
-      if (days.contains(candidate.weekday)) {
-        return candidate;
-      }
+      final candidate = DateTime(from.year, from.month, from.day)
+          .add(Duration(days: offset));
+      if (weekdays.contains(candidate.weekday)) return candidate;
     }
 
     return null;
@@ -248,18 +246,21 @@ class AppDb {
       whereArgs: [_dateKey(date)],
       orderBy: 'subject',
     );
-
     return rows.map(Homework.fromMap).toList();
   }
 
-  Future<void> toggleHomework(Homework hw, bool done) async {
+  Future<void> toggleHomework(Homework homework, bool done) async {
     final db = await database;
     await db.update(
       'homework',
       {'done': done ? 1 : 0},
       where: 'id = ?',
-      whereArgs: [hw.id],
+      whereArgs: [homework.id],
     );
+
+    if (done && homework.id != null) {
+      await notifications.cancel(10000 + homework.id!);
+    }
   }
 
   static String _dateKey(DateTime date) =>
@@ -276,12 +277,10 @@ String weekdayName(int weekday) {
     6: 'Суббота',
     7: 'Воскресенье',
   };
-
   return names[weekday]!;
 }
 
-String prettyDate(DateTime date) =>
-    DateFormat('dd.MM.yyyy').format(date);
+String prettyDate(DateTime date) => DateFormat('dd.MM.yyyy').format(date);
 
 bool sameDay(DateTime a, DateTime b) =>
     a.year == b.year && a.month == b.month && a.day == b.day;
@@ -315,9 +314,7 @@ class _HomePageState extends State<HomePage> {
             icon: const Icon(Icons.calendar_month),
             onPressed: () async {
               await Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => const SchedulePage(),
-                ),
+                MaterialPageRoute(builder: (_) => const SchedulePage()),
               );
               refresh();
             },
@@ -329,9 +326,7 @@ class _HomePageState extends State<HomePage> {
           DateStrip(
             selected: date,
             onChanged: (newDate) {
-              setState(() {
-                selectedDate = newDate;
-              });
+              setState(() => selectedDate = newDate);
             },
           ),
           Expanded(
@@ -339,9 +334,7 @@ class _HomePageState extends State<HomePage> {
               future: AppDb.instance.lessonsForWeekday(date.weekday),
               builder: (context, lessonSnapshot) {
                 if (!lessonSnapshot.hasData) {
-                  return const Center(
-                    child: CircularProgressIndicator(),
-                  );
+                  return const Center(child: CircularProgressIndicator());
                 }
 
                 final lessons = lessonSnapshot.data!;
@@ -377,20 +370,22 @@ class _HomePageState extends State<HomePage> {
                           style: Theme.of(context).textTheme.titleLarge,
                         ),
                         const SizedBox(height: 12),
-                        ...lessons.map(
-                          (lesson) => LessonCard(
+                        ...lessons.map((lesson) {
+                          final subjectHomework = homework
+                              .where(
+                                (item) =>
+                                    item.subject.trim().toLowerCase() ==
+                                    lesson.subject.trim().toLowerCase(),
+                              )
+                              .toList();
+
+                          return LessonCard(
                             lesson: lesson,
                             date: date,
-                            homework: homework
-                                .where(
-                                  (h) =>
-                                      h.subject.trim().toLowerCase() ==
-                                      lesson.subject.trim().toLowerCase(),
-                                )
-                                .toList(),
+                            homework: subjectHomework,
                             onChanged: refresh,
-                          ),
-                        ),
+                          );
+                        }),
                       ],
                     );
                   },
@@ -418,7 +413,7 @@ class LessonCard extends StatelessWidget {
     required this.onChanged,
   });
 
-  Future<void> finishLesson(BuildContext context) async {
+  Future<void> addHomework(BuildContext context) async {
     final nextDate = await AppDb.instance.nextLessonDate(
       subject: lesson.subject,
       from: date,
@@ -432,7 +427,7 @@ class LessonCard extends StatelessWidget {
         builder: (context) => AlertDialog(
           title: const Text('Следующий урок не найден'),
           content: Text(
-            'Добавь предмет "${lesson.subject}" в расписание.',
+            'Добавь предмет "${lesson.subject}" в расписание на другой день.',
           ),
           actions: [
             TextButton(
@@ -456,16 +451,15 @@ class LessonCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Следующий урок: '
-              '${weekdayName(nextDate.weekday)}, '
+              'Следующий урок: ${weekdayName(nextDate.weekday)}, '
               '${prettyDate(nextDate)}',
             ),
             const SizedBox(height: 12),
             TextField(
               controller: controller,
               autofocus: true,
-              minLines: 2,
-              maxLines: 5,
+              minLines: 3,
+              maxLines: 6,
               decoration: const InputDecoration(
                 border: OutlineInputBorder(),
                 labelText: 'Домашнее задание',
@@ -479,14 +473,15 @@ class LessonCard extends StatelessWidget {
             onPressed: () => Navigator.pop(context),
             child: const Text('Отмена'),
           ),
-          FilledButton(
+          FilledButton.icon(
             onPressed: () {
               final text = controller.text.trim();
               if (text.isNotEmpty) {
                 Navigator.pop(context, text);
               }
             },
-            child: const Text('Сохранить'),
+            icon: const Icon(Icons.save),
+            label: const Text('Сохранить'),
           ),
         ],
       ),
@@ -513,6 +508,26 @@ class LessonCard extends StatelessWidget {
     );
 
     onChanged();
+
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Домашнее задание сохранено на ${prettyDate(nextDate)}',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> finishLesson(BuildContext context) async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '${lesson.subject}: урок отмечен как завершённый',
+        ),
+      ),
+    );
   }
 
   Future<void> scheduleReminder({
@@ -534,8 +549,7 @@ class LessonCard extends StatelessWidget {
       android: AndroidNotificationDetails(
         'homework_channel',
         'Домашние задания',
-        channelDescription:
-            'Напоминания о домашних заданиях',
+        channelDescription: 'Напоминания о домашних заданиях',
         importance: Importance.high,
         priority: Priority.high,
       ),
@@ -547,8 +561,7 @@ class LessonCard extends StatelessWidget {
       text,
       tz.TZDateTime.from(reminderDate, tz.local),
       details,
-      androidScheduleMode:
-          AndroidScheduleMode.inexactAllowWhileIdle,
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
     );
   }
 
@@ -557,55 +570,72 @@ class LessonCard extends StatelessWidget {
     final isToday = sameDay(date, DateTime.now());
 
     return Card(
-      margin: const EdgeInsets.only(bottom: 10),
+      margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                CircleAvatar(
-                  child: Text('${lesson.lessonNo}'),
-                ),
+                CircleAvatar(child: Text('${lesson.lessonNo}')),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
                     lesson.subject,
-                    style: Theme.of(context).textTheme.titleMedium,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
                   ),
                 ),
-                if (isToday)
-                  FilledButton.tonalIcon(
-                    onPressed: () => finishLesson(context),
-                    icon: const Icon(Icons.check),
-                    label: const Text('Урок окончен'),
-                  ),
               ],
             ),
-            if (homework.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: () => addHomework(context),
+                icon: const Icon(Icons.edit_note),
+                label: const Text('Записать домашнее задание'),
+              ),
+            ),
+            if (isToday) ...[
               const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () => finishLesson(context),
+                  icon: const Icon(Icons.check_circle_outline),
+                  label: const Text('Урок окончен'),
+                ),
+              ),
+            ],
+            if (homework.isNotEmpty) ...[
+              const SizedBox(height: 14),
               const Divider(),
+              const SizedBox(height: 4),
+              const Text(
+                'Домашнее задание:',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 4),
               ...homework.map(
-                (hw) => CheckboxListTile(
-                  value: hw.done == 1,
+                (item) => CheckboxListTile(
+                  value: item.done == 1,
                   contentPadding: EdgeInsets.zero,
-                  controlAffinity:
-                      ListTileControlAffinity.leading,
+                  controlAffinity: ListTileControlAffinity.leading,
                   title: Text(
-                    hw.text,
+                    item.text,
                     style: TextStyle(
-                      decoration: hw.done == 1
+                      decoration: item.done == 1
                           ? TextDecoration.lineThrough
                           : null,
                     ),
                   ),
-                  subtitle: const Text(
-                    'Домашнее задание к этому уроку',
-                  ),
+                  subtitle: const Text('К этому уроку'),
                   onChanged: (value) async {
                     await AppDb.instance.toggleHomework(
-                      hw,
+                      item,
                       value ?? false,
                     );
                     onChanged();
@@ -632,8 +662,9 @@ class DateStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final monday =
-        selected.subtract(Duration(days: selected.weekday - 1));
+    final monday = selected.subtract(
+      Duration(days: selected.weekday - 1),
+    );
 
     return SizedBox(
       height: 88,
@@ -683,7 +714,6 @@ class SchedulePage extends StatefulWidget {
 
 class _SchedulePageState extends State<SchedulePage> {
   int weekday = DateTime.monday;
-
   static const lessonCount = 8;
 
   final controllers = List.generate(
@@ -698,24 +728,19 @@ class _SchedulePageState extends State<SchedulePage> {
   }
 
   Future<void> loadDay() async {
-    final lessons =
-        await AppDb.instance.lessonsForWeekday(weekday);
+    final lessons = await AppDb.instance.lessonsForWeekday(weekday);
 
     for (final controller in controllers) {
       controller.clear();
     }
 
     for (final lesson in lessons) {
-      if (lesson.lessonNo >= 1 &&
-          lesson.lessonNo <= lessonCount) {
-        controllers[lesson.lessonNo - 1].text =
-            lesson.subject;
+      if (lesson.lessonNo >= 1 && lesson.lessonNo <= lessonCount) {
+        controllers[lesson.lessonNo - 1].text = lesson.subject;
       }
     }
 
-    if (mounted) {
-      setState(() {});
-    }
+    if (mounted) setState(() {});
   }
 
   Future<void> saveDay() async {
@@ -730,9 +755,7 @@ class _SchedulePageState extends State<SchedulePage> {
     if (!mounted) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Расписание сохранено'),
-      ),
+      const SnackBar(content: Text('Расписание сохранено')),
     );
   }
 
@@ -766,17 +789,12 @@ class _SchedulePageState extends State<SchedulePage> {
               children: [
                 for (int day = 1; day <= 7; day++)
                   Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 3),
+                    padding: const EdgeInsets.symmetric(horizontal: 3),
                     child: ChoiceChip(
                       selected: weekday == day,
-                      label: Text(
-                        weekdayName(day).substring(0, 2),
-                      ),
+                      label: Text(weekdayName(day).substring(0, 2)),
                       onSelected: (_) async {
-                        setState(() {
-                          weekday = day;
-                        });
+                        setState(() => weekday = day);
                         await loadDay();
                       },
                     ),
@@ -812,8 +830,7 @@ class _SchedulePageState extends State<SchedulePage> {
                 child: FilledButton.icon(
                   onPressed: saveDay,
                   icon: const Icon(Icons.save),
-                  label:
-                      const Text('Сохранить расписание'),
+                  label: const Text('Сохранить расписание'),
                 ),
               ),
             ),
