@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build APK
 
 on:
   workflow_dispatch:
@@ -22,9 +22,43 @@ jobs:
       - name: Flutter version
         run: flutter --version
 
-      - name: Create Android project files
+      - name: Create Android project
+        run: flutter create . --platforms=android
+
+      - name: Enable core library desugaring
         run: |
-          flutter create . --platforms=android
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("android/app/build.gradle.kts")
+          text = path.read_text()
+
+          old = """compileOptions {
+              sourceCompatibility = JavaVersion.VERSION_11
+              targetCompatibility = JavaVersion.VERSION_11
+          }"""
+
+          new = """compileOptions {
+              isCoreLibraryDesugaringEnabled = true
+              sourceCompatibility = JavaVersion.VERSION_11
+              targetCompatibility = JavaVersion.VERSION_11
+          }"""
+
+          if old in text:
+              text = text.replace(old, new)
+          elif "isCoreLibraryDesugaringEnabled = true" not in text:
+              raise SystemExit("compileOptions block not found")
+
+          if "coreLibraryDesugaring(" not in text:
+              text += """
+
+          dependencies {
+              coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+          }
+          """
+
+          path.write_text(text)
+          PY
 
       - name: Install dependencies
         run: flutter pub get
