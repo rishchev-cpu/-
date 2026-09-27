@@ -31,25 +31,25 @@ jobs:
           from pathlib import Path
 
           path = Path("android/app/build.gradle.kts")
+
+          if not path.exists():
+              raise SystemExit("android/app/build.gradle.kts not found")
+
           text = path.read_text()
 
-          old = """compileOptions {
-              sourceCompatibility = JavaVersion.VERSION_11
-              targetCompatibility = JavaVersion.VERSION_11
-          }"""
+          if "isCoreLibraryDesugaringEnabled = true" not in text:
+              marker = "compileOptions {"
 
-          new = """compileOptions {
-              isCoreLibraryDesugaringEnabled = true
-              sourceCompatibility = JavaVersion.VERSION_11
-              targetCompatibility = JavaVersion.VERSION_11
-          }"""
+              if marker not in text:
+                  raise SystemExit("compileOptions block not found")
 
-          if old in text:
-              text = text.replace(old, new)
-          elif "isCoreLibraryDesugaringEnabled = true" not in text:
-              raise SystemExit("compileOptions block not found")
+              text = text.replace(
+                  marker,
+                  marker + "\n        isCoreLibraryDesugaringEnabled = true",
+                  1,
+              )
 
-          if "coreLibraryDesugaring(" not in text:
+          if 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:' not in text:
               text += """
 
           dependencies {
@@ -58,6 +58,7 @@ jobs:
           """
 
           path.write_text(text)
+          print(text)
           PY
 
       - name: Install dependencies
